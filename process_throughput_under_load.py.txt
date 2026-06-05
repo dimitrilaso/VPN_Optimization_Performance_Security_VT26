@@ -1,0 +1,127 @@
+import os, json, csv, statistics, re, sys
+
+ROOT = "throughput_under_load_logs"
+if not os.path.isdir(ROOT):
+    print(f"❌ Folder '{ROOT}' not found.")
+    sys.exit(1)
+
+# Accept dot or comma decimal in subdir names
+load_dir_pat = re.compile(r"load_(\d+)pct_([\d\.,]+)Mbps")
+
+def read_json(p):
+    with open(p, "r") as f:
+        return json.load(f)
+
+def mbps(bps): return bps/1e6
+
+rows = []
+for sub in sorted(os.listdir(ROOT)):
+    m = load_dir_pat.match(sub)
+    if not m: 
+        continue
+    load_pct = int(m.group(1))
+    rate = float(m.group(2).replace(',', '.'))
+    subdir = os.path.join(ROOT, sub)
+
+    for fn in sorted(os.listdir(subdir)):
+        path = os.path.join(subdir, fn)
+        if not fn.endswith(".json"): 
+            continue
+        data = read_json(path)
+        end = data.get("end", {})
+
+        if fn.startswith("tcp_fg_"):
+            # Prefer receiver (“goodput”)
+            sum_recv = end.get("sum_received") or end.get("sum")
+            sum_sent = end.get("sum_sent") or end.get("sum")
+            bps = None
+            if sum_recv and "bits_per_second" in sum_recv: bps = sum_recv["bits_per_second"]
+            elif sum_sent and "bits_per_second" in sum_sent: bps = sum_sent["bits_per_second"]
+
+            # retransmits (best-effort across versions)
+            retrans = None
+            if sum_sent and "retransmits" in sum_sent:
+                retrans = sum_sent["retransmits"]
+            else:
+                streams = end.get("streams", [])
+                acc, found = 0, False
+                for s in streams:
+                    snd = s.get("sender")
+                    if snd and "retransmits" in snd:
+                        acc += snd["retransmits"]; found = True
+                retrans = acc if found else None
+
+            if bps is not None:
+                rows.append({
+                    "load_pct": load_pct,
+                    "bg_offered_Mbps": rate,
+                    "type": "TCP_foreground",
+                    "file": fn,
+                    "throughput_Mbps": mbps(bps),
+                    "retransmits": retrans
+                })
+
+        elif fn.startswith("udp_bg_"):
+            s = end.get("sum") or end.get("sum_received") or {}
+            bps = s.get("bits_per_second")
+            loss = s.get("lost_percent")
+            jit  = s.get("jitter_ms")
+            if bps is not None:
+                rows.append({
+                    "load_pct": load_pct,
+                    "bg_offered_Mbps": rate,
+                    "type": "UDP_background",
+                    "file": fn,
+                    "throughput_Mbps": mbps(bps),
+                    "udp_loss_percent": loss,
+                    "udp_jitter_ms": jit
+                })
+
+if not rows:
+    print("❌ No results parsed. Did the collector create JSON logs?")
+    sys.exit(1)
+
+# Write CSV
+csv_name = "throughput_under_load_results.csv"
+# gather all keys in order
+keys = []
+for r in rows:
+    for k in r.keys():
+        if k not in keys: keys.append(k)
+with open(csv_name, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=keys)
+    w.writeheader(); w.writerows(rows)
+
+print("✅ Processing complete.")
+print(f"Per-batch results saved to {csv_name}\n")
+
+# Aggregates per load level for the foreground TCP and background UDP
+def agg(vals):
+    return (statistics.mean(vals), min(vals), max(vals)) if vals else (None, None, None)
+
+by_load = {}
+for r in rows:
+    by_load.setdefault(r["load_pct"], []).append(r)
+
+print("--- Aggregates by load level (foreground TCP vs background UDP) ---")
+for lpct in sorted(by_load.keys()):
+    items = by_load[lpct]
+    offered = {r["bg_offered_Mbps"] for r in items}
+    rate = sorted(offered)[0] if offered else None
+
+    tcp = [r for r in items if r["type"]=="TCP_foreground"]
+    udp = [r for r in items if r["type"]=="UDP_background"]
+
+    tcp_tp = [r["throughput_Mbps"] for r in tcp]
+    udp_tp = [r["throughput_Mbps"] for r in udp]
+    udp_loss = [r.get("udp_loss_percent") for r in udp if r.get("udp_loss_percent") is not None]
+    udp_jit  = [r.get("udp_jitter_ms") for r in udp if r.get("udp_jitter_ms") is not None]
+
+    mt, mint, maxt = agg(tcp_tp)
+    mu, minu, maxu = agg(udp_tp)
+    ml, _, _ = agg(udp_loss)
+    mj, _, _ = agg(udp_jit)
+
+    print(f"Load {lpct}% (~{rate:.2f} Mbps bg): "
+          f"TCP fg mean {mt:.2f} Mbps (min {mint:.2f}, max {maxt:.2f}); "
+          f"UDP bg recv mean {mu:.2f} Mbps; loss {ml:.2f}% ; jitter {mj:.3f} ms")

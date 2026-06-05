@@ -1,0 +1,55 @@
+import os
+import re
+import csv
+import statistics
+
+# Directory where your ping logs are stored
+LOG_DIR = "latency_logs"
+
+# Pattern to match the rtt line from ping output
+rtt_pattern = re.compile(r"rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms")
+
+# Store results here
+results = []
+
+# Read all .txt files in the log directory
+for filename in sorted(os.listdir(LOG_DIR)):
+    if filename.endswith(".txt"):
+        filepath = os.path.join(LOG_DIR, filename)
+        with open(filepath, "r") as f:
+            content = f.read()
+            match = rtt_pattern.search(content)
+            if match:
+                rtt_min = float(match.group(1))
+                rtt_avg = float(match.group(2))
+                rtt_max = float(match.group(3))
+                one_way_latency = rtt_avg / 2
+                results.append({
+                    "file": filename,
+                    "RTT_min_ms": rtt_min,
+                    "RTT_avg_ms": rtt_avg,
+                    "RTT_max_ms": rtt_max,
+                    "OneWayLatency_ms": one_way_latency
+                })
+
+# Save results to CSV
+csv_file = "latency_results.csv"
+with open(csv_file, "w", newline="") as csvfile:
+    fieldnames = ["file", "RTT_min_ms", "RTT_avg_ms", "RTT_max_ms", "OneWayLatency_ms"]
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(results)
+
+# Print summary statistics
+avg_rtt_values = [r["RTT_avg_ms"] for r in results]
+avg_oneway_values = [r["OneWayLatency_ms"] for r in results]
+
+print("✅ Processing complete.")
+print(f"Results saved to {csv_file}")
+print("\n--- Summary Statistics ---")
+print(f"Mean RTT (ms): {statistics.mean(avg_rtt_values):.3f}")
+print(f"Min RTT (ms): {min(avg_rtt_values):.3f}")
+print(f"Max RTT (ms): {max(avg_rtt_values):.3f}")
+print(f"Mean One-Way Latency (ms): {statistics.mean(avg_oneway_values):.3f}")
+print(f"Min One-Way Latency (ms): {min(avg_oneway_values):.3f}")
+print(f"Max One-Way Latency (ms): {max(avg_oneway_values):.3f}")

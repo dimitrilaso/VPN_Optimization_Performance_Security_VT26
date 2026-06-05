@@ -1,0 +1,54 @@
+#!/bin/bash
+set -euo pipefail
+
+SERVER_UDP="192.168.9.10"
+SERVER_TCP="192.168.9.10"
+UDP_PORT=5201
+TCP_PORT=5202
+
+BOTTLENECK_MBPS=250           # Site A link cap
+LOAD_PCTS=(25 50 75)
+BATCHES=10
+TCP_PARALLEL=4
+TCP_DURATION=30
+UDP_DURATION=60
+WARMUP_SEC=10
+SLEEP_BETWEEN=15
+OUTDIR="./throughput_under_load_logs"
+
+mkdir -p "$OUTDIR"
+
+for pct in "${LOAD_PCTS[@]}"; do
+  RATE=$(awk -v b="$BOTTLENECK_MBPS" -v p="$pct" 'BEGIN{printf "%.2f", b*p/100.0}')
+  SUBDIR="$OUTDIR/load_${pct}pct_${RATE}Mbps"
+  mkdir -p "$SUBDIR"
+
+  echo "=== Load ${pct}% (~${RATE} Mbps UDP background) ==="
+  for i in $(seq 1 "$BATCHES"); do
+    TS=$(date +"%Y%m%d_%H%M%S")
+    UDP_LOG="$SUBDIR/udp_bg_${pct}pct_batch${i}_$TS.json"
+    TCP_LOG="$SUBDIR/tcp_fg_${pct}pct_batch${i}_$TS.json"
+
+    echo "[$TS] Start UDP background ${RATE} Mbps on ${SERVER_UDP}:${UDP_PORT} for ${UDP_DURATION}s…"
+    (iperf3 -u -c "$SERVER_UDP" -p "$UDP_PORT" -b "${RATE}M" -t "$UDP_DURATION" -i 1 --json > "$UDP_LOG" 2>&1) & bgpid=$!
+
+    echo "Warm-up ${WARMUP_SEC}s…"
+    sleep "$WARMUP_SEC"
+
+    echo "Run TCP foreground ${TCP_DURATION}s, -P ${TCP_PARALLEL} to ${SERVER_TCP}:${TCP_PORT}…"
+    iperf3 -c "$SERVER_TCP" -p "$TCP_PORT" -t "$TCP_DURATION" -P "$TCP_PARALLEL" --json > "$TCP_LOG"
+
+    echo "Wait for UDP background to finish…"
+    wait "$bgpid" || true
+
+    echo "Saved: $TCP_LOG"
+    echo "Saved: $UDP_LOG"
+
+    if [ "$i" -lt "$BATCHES" ]; then
+      echo "Sleeping ${SLEEP_BETWEEN}s…"
+      sleep "$SLEEP_BETWEEN"
+    fi
+  done
+done
+
+echo "✅ Throughput-under-load collection finished. Logs in $OUTDIR"

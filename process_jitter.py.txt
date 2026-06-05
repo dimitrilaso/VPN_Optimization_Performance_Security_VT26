@@ -1,0 +1,72 @@
+import os, re, csv, statistics
+
+# Change to "." if you run the script *inside* jitter_logs
+LOG_DIR = "jitter_logs"
+
+# Regex patterns for Linux ping
+rtt_line = re.compile(r"rtt min/avg/max/(?:mdev|stddev) = ([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+) ms")
+time_line = re.compile(r"time[=<]\s*([\d\.]+)\s*ms")  # extracts per-packet RTT
+loss_line = re.compile(r"(\d+)% packet loss")
+
+rows = []
+for fn in sorted(os.listdir(LOG_DIR)):
+    if not fn.endswith(".txt"): 
+        continue
+    path = os.path.join(LOG_DIR, fn)
+    with open(path, "r", errors="ignore") as f:
+        text = f.read()
+
+    # Per-packet RTTs for jitter (sequence order matters)
+    rtts = [float(m.group(1)) for m in time_line.finditer(text)]
+
+    # Jitter (RFC 1889-inspired): average absolute diff between consecutive RTTs
+    jitter_ms = None
+    if len(rtts) >= 2:
+        diffs = [abs(rtts[i] - rtts[i-1]) for i in range(1, len(rtts))]
+        jitter_ms = sum(diffs) / len(diffs)
+
+    # Summary RTTs from ping footer
+    rtt_match = rtt_line.search(text)
+    rtt_min = rtt_avg = rtt_max = mdev = None
+    if rtt_match:
+        rtt_min, rtt_avg, rtt_max, mdev = map(float, rtt_match.groups())
+
+    # Packet loss
+    loss = None
+    loss_match = loss_line.search(text)
+    if loss_match:
+        loss = int(loss_match.group(1))
+
+    rows.append({
+        "file": fn,
+        "samples": len(rtts),
+        "RTT_min_ms": rtt_min,
+        "RTT_avg_ms": rtt_avg,
+        "RTT_max_ms": rtt_max,
+        "RTT_mdev_ms": mdev,
+        "Packet_Loss_%": loss,
+        "Jitter_avg_absdiff_ms": jitter_ms
+    })
+
+# Write CSV
+csv_name = "jitter_results.csv"
+with open(csv_name, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+    w.writeheader()
+    w.writerows(rows)
+
+# Print aggregate stats
+def col(vals):
+    vals = [v for v in vals if v is not None]
+    return (statistics.mean(vals), min(vals), max(vals)) if vals else (None, None, None)
+
+mean_rtt, min_rtt, max_rtt = col([r["RTT_avg_ms"] for r in rows])
+mean_jit, min_jit, max_jit = col([r["Jitter_avg_absdiff_ms"] for r in rows])
+mean_loss, _, _ = col([r["Packet_Loss_%"] for r in rows])
+
+print("✅ Processing complete.")
+print(f"Results saved to {csv_name}")
+print("\n--- Aggregate (10×100 recommended) ---")
+print(f"Mean RTT (ms): {mean_rtt:.3f}   Min: {min_rtt:.3f}   Max: {max_rtt:.3f}")
+print(f"Mean Jitter (ms): {mean_jit:.3f} Min: {min_jit:.3f}  Max: {max_jit:.3f}")
+print(f"Mean Packet Loss (%): {mean_loss:.2f}")

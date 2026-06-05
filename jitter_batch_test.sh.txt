@@ -1,0 +1,23 @@
+#!/bin/bash
+# Run 10 batches of 100 pings to Site A and save logs.
+
+TARGET="192.168.9.10"   # Site A host to ping
+BATCHES=10
+COUNT=100
+SLEEP_BETWEEN=30        # seconds between batches
+OUTDIR="./jitter_logs"
+
+mkdir -p "$OUTDIR"
+
+for i in $(seq 1 $BATCHES); do
+  ts=$(date +"%Y%m%d_%H%M%S")
+  out="$OUTDIR/ping_jitter_batch_${i}_$ts.txt"
+  echo "[$(date)] Batch $i/$BATCHES → $TARGET ($COUNT pings)"
+  ping -c "$COUNT" "$TARGET" > "$out"
+  echo "Saved: $out"
+  if [ "$i" -lt "$BATCHES" ]; then
+    sleep "$SLEEP_BETWEEN"
+  fi
+done
+
+echo "✅ All batches done. Logs in $OUTDIR"

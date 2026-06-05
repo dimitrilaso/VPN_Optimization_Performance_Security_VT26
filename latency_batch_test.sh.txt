@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Configuration
+TARGET="192.168.9.10"
+BATCH_COUNT=10
+PING_COUNT=100
+SLEEP_BETWEEN=30  # seconds between batches
+OUTPUT_DIR="./latency_logs"
+
+# Create output directory
+mkdir -p "$OUTPUT_DIR"
+
+# Start batch testing
+for i in $(seq 1 $BATCH_COUNT); do
+    TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
+    OUTFILE="$OUTPUT_DIR/ping_batch_${i}_$TIMESTAMP.txt"
+
+    echo "[$(date)] Starting batch $i of $BATCH_COUNT: pinging $TARGET with $PING_COUNT packets..."
+    ping -c "$PING_COUNT" "$TARGET" > "$OUTFILE"
+
+    echo "Batch $i saved to $OUTFILE"
+    
+    if [ "$i" -lt "$BATCH_COUNT" ]; then
+        echo "Sleeping $SLEEP_BETWEEN seconds before next batch..."
+        sleep "$SLEEP_BETWEEN"
+    fi
+done
+
+echo "✅ All $BATCH_COUNT latency batches completed. Results saved in $OUTPUT_DIR."
